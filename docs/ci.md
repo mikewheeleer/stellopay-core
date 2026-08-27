@@ -12,26 +12,28 @@
 **File:** `.github/workflows/contracts.yml`  
 **Triggers:** push and pull_request to `main`
 
-The workflow runs two parallel/independent jobs on `ubuntu-latest`:
+The workflow runs the contract job on `ubuntu-latest`:
 
 ### Job: `contracts`
 This job runs a smoke check on formatting, building, and testing the onchain contracts tree.
 
 | # | Step | Command | Working directory |
 |---|---|---|---|
-| 1 | Install Rust (stable + rustfmt) | _managed by `dtolnay/rust-toolchain@stable`_ | — |
+| 1 | Install Rust (nightly + rustfmt) | `rustup toolchain install nightly --profile minimal --component rustfmt` | — |
 | 2 | Cache Cargo registry | _managed by `Swatinem/rust-cache@v2`_ | — |
 | 3 | Check formatting | `cargo fmt --all -- --check` | `onchain/` |
 | 4 | Build workspace | `cargo build --workspace --verbose` | `onchain/` |
 | 5 | Test workspace | `cargo test --workspace --verbose` | `onchain/` |
 | 6 | Install wasm32 target | `rustup target add wasm32-unknown-unknown` | — |
 | 7 | Build contracts to WASM | `cargo build --workspace --release --target wasm32-unknown-unknown --verbose` | `onchain/` |
-| 8 | Run WASM size regression check | `cargo run --release --manifest-path tools/wasm_size_check/Cargo.toml -- --baseline … --wasm-dir … --tolerance-pct 5 --fail-on-new --report …` | repo root |
-| 9 | Upload size report artifact | _managed by `actions/upload-artifact@v4`_ | — |
+| 8 | Prepare the four `cdylib` artifacts | Copy `multisig`, `price_oracle`, `rbac`, and `stello_pay_contract` into the checker inventory | repo root |
+| 9 | Enforce 131,072-byte hard ceiling | `stat` each inventory artifact and fail above Stellar's limit | repo root |
+| 10 | Run WASM size regression check | `cargo run --release --manifest-path tools/wasm_size_check/Cargo.toml -- --baseline … --wasm-dir … --tolerance-pct 5 --fail-on-new --report …` | repo root |
+| 11 | Upload size report artifact | _managed by `actions/upload-artifact@v4`_ | — |
 
-Steps 1–2 are handled automatically by GitHub Actions and have no equivalent
-local command. Steps 3–8 are the checks contributors must pass. Step 9 is a
-diagnostic convenience — its presence is gated on `if: always()` so it is
+Steps 1–2 are handled by the workflow's setup/cache actions and have no
+equivalent local command. Steps 3–10 are the checks contributors must pass.
+Step 11 is a diagnostic convenience — its presence is gated on `if: always()` so it is
 preserved on failure for post-mortem download.
 
 ### Job: `doc-checker`
@@ -54,7 +56,7 @@ Run the same checks CI executes, in the same order, before opening a PR.
 
 | Requirement | How to install |
 |---|---|
-| Rust (stable) | `rustup install stable && rustup default stable` |
+| Rust (nightly) | `rustup toolchain install nightly --profile minimal --component rustfmt` |
 | `rustfmt` component | `rustup component add rustfmt` |
 | WASM target | `rustup target add wasm32-unknown-unknown` |
 
@@ -86,15 +88,23 @@ cargo build --workspace --release --target wasm32-unknown-unknown
 And then from the repository root:
 
 ```bash
-# 5. WASM size regression check (step 8 in CI)
+# 5. Prepare only deployable contract artifacts, matching CI's inventory.
+mkdir -p onchain/target/wasm-size-check/release
+for contract in multisig price_oracle rbac stello_pay_contract; do
+    cp "onchain/target/wasm32-unknown-unknown/release/${contract}.wasm" \
+       "onchain/target/wasm-size-check/release/${contract}.wasm"
+done
+
+# 6. WASM size regression check (step 10 in CI)
 cargo run --release --manifest-path tools/wasm_size_check/Cargo.toml -- \
     --baseline  benchmarks/wasm_sizes.json \
-    --wasm-dir  onchain/target/wasm32-unknown-unknown/release \
+    --wasm-dir  onchain/target/wasm-size-check/release \
     --tolerance-pct 5 \
     --fail-on-new
 ```
 
-All five commands must exit with code `0` for a PR to be mergeable.
+The build, inventory, ceiling, and checker commands must all exit with code
+`0` for a PR to be mergeable.
 
 ### Fixing common failures
 
@@ -150,12 +160,17 @@ merge.
 
 1. CI builds every contract in the `onchain` workspace to
    `wasm32-unknown-unknown` in release mode (step 7 above).
-2. The committed `benchmarks/wasm_sizes.json` file records the size,
+2. CI inventories every `cdylib` contract explicitly, excluding Cargo's
+   dependency artifacts under `target/**/release/deps`.
+3. Every inventoried artifact must be at or below **131,072 bytes**, the
+   Stellar deployment ceiling. This is a separate hard-failure step, even
+   when a relative comparison would remain within tolerance.
+4. The committed `benchmarks/wasm_sizes.json` file records the size,
    SHA-256 (`sha256:<hex>`), and capture date for every successfully
    built `.wasm`.
-3. After the build, CI invokes `wasm_size_check` (step 8 above) and
+5. After the build, CI invokes `wasm_size_check` (step 10 above) and
    compares observed sizes against the baseline.
-4. The job fails (`exit 1`) if **any** contract:
+6. The job fails (`exit 1`) if **any** contract:
    - Grows by more than the configured tolerance (currently **5 %** of
      the baseline size, computed as `delta_bytes / baseline_bytes`,
      strictly greater than the threshold), **without a refresh of its
@@ -167,7 +182,13 @@ merge.
    - Has a baseline entry but no `.wasm` on disk — the contract was
      removed without pruning the baseline (override with
      `--allow-missing` only for temporary experiments).
-5. The job **passes** for any contract that:
+
+The first baseline generated from the current `main` source records two
+existing over-ceiling artifacts (`price_oracle` and `stello_pay_contract`).
+The ceiling step intentionally exposes that deployment risk; reducing those
+artifacts is tracked separately and is outside this CI-guard change.
+
+7. The job **passes** for any contract that:
    - Exactly equals its baseline.
    - Grew but stays within the tolerance.
    - **Shrank** — shrinking is always a pass but reported in the table
@@ -182,16 +203,28 @@ baseline and commit the result **in the same PR**:
 # 1. Build to wasm32 as usual.
 cargo build --workspace --release --target wasm32-unknown-unknown
 
-# 2. Refresh the committed baseline.
+# 2. Copy only deployable cdylib artifacts, matching CI's inventory.
+mkdir -p onchain/target/wasm-size-check/release
+for contract in multisig price_oracle rbac stello_pay_contract; do
+    cp "onchain/target/wasm32-unknown-unknown/release/${contract}.wasm" \
+       "onchain/target/wasm-size-check/release/${contract}.wasm"
+done
+
+# 3. Confirm no artifact crosses 131,072 bytes before refreshing.
+for artifact in onchain/target/wasm-size-check/release/*.wasm; do
+    test "$(stat -c '%s' "$artifact")" -le 131072
+done
+
+# 4. Refresh the committed baseline.
 cargo run --release --manifest-path tools/wasm_size_check/Cargo.toml -- \
     --baseline  benchmarks/wasm_sizes.json \
-    --wasm-dir  onchain/target/wasm32-unknown-unknown/release \
+    --wasm-dir  onchain/target/wasm-size-check/release \
     --update-baseline
 
-# 3. Verify the change is intentional.
+# 5. Verify the change is intentional.
 git diff benchmarks/wasm_sizes.json
 
-# 4. Commit + push (in the same PR as the source change).
+# 6. Commit + push (in the same PR as the source change).
 git add benchmarks/wasm_sizes.json
 git commit -m "chore(wasm-size): refresh baseline for <list-of-changed-contracts>"
 git push
@@ -203,11 +236,11 @@ contract(s) regressed, by how many bytes, and the percent delta.
 
 ### Bootstrap
 
-The baseline file `benchmarks/wasm_sizes.json` is committed and may be
-empty on first merge of this feature. After the first PR lands, follow
-the update procedure above to populate it. A PR that adds a brand-new
-contract crate must include a baseline entry for it (otherwise
-`--fail-on-new` will trip CI).
+The baseline file `benchmarks/wasm_sizes.json` is committed with one entry
+for each current `cdylib` contract. It was generated from `origin/main` using
+the pinned release profile and the same four-file inventory used by CI. A PR
+that adds a brand-new contract crate must include its artifact and baseline
+entry (otherwise `--fail-on-new` will trip CI).
 
 ### Tolerance tuning
 
