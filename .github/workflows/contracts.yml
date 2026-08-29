@@ -39,3 +39,62 @@ jobs:
       - name: Test workspace
         working-directory: onchain
         run: cargo test --workspace --verbose
+
+      # Keep the native build/test signals above independent from the
+      # deployable-artifact checks below. A wasm compiler failure must be
+      # distinguishable from a size-policy failure in the Actions UI.
+      - name: Install wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Build deployable WASM artifacts
+        working-directory: onchain
+        run: cargo build --workspace --release --target wasm32-unknown-unknown --verbose
+
+      - name: Prepare contract WASM inventory
+        run: |
+          set -euo pipefail
+          inventory_dir="onchain/target/wasm-size-check/release"
+          mkdir -p "$inventory_dir"
+          for contract in multisig price_oracle rbac stello_pay_contract; do
+            artifact="onchain/target/wasm32-unknown-unknown/release/${contract}.wasm"
+            test -f "$artifact" || {
+              echo "::error title=Missing WASM artifact::${artifact} was not produced" >&2
+              exit 1
+            }
+            cp "$artifact" "$inventory_dir/${contract}.wasm"
+          done
+
+      # Keep this as its own step so crossing Stellar's absolute deployment
+      # ceiling is not hidden inside the relative-regression report.
+      - name: Enforce Stellar contract size ceiling
+        run: |
+          set -euo pipefail
+          max_size=131072
+          failed=0
+          for artifact in onchain/target/wasm-size-check/release/*.wasm; do
+            size=$(stat -c '%s' "$artifact")
+            if (( size > max_size )); then
+              echo "::error title=WASM exceeds Stellar limit::${artifact} is ${size} bytes; maximum is ${max_size}" >&2
+              failed=1
+            fi
+          done
+          exit "$failed"
+
+      - name: Check WASM size regressions
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          cargo run --release --manifest-path tools/wasm_size_check/Cargo.toml -- \
+            --baseline benchmarks/wasm_sizes.json \
+            --wasm-dir onchain/target/wasm-size-check/release \
+            --tolerance-pct 5 \
+            --fail-on-new \
+            --report artifacts/wasm_size_report.md
+
+      - name: Upload WASM size report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-size-report
+          path: artifacts/wasm_size_report.md
+          if-no-files-found: ignore
