@@ -60,9 +60,13 @@ impl UpgradeableContract {
             .storage()
             .instance()
             .get(&Symbol::new(&env, "admin"))
+            // Test-only mock invariant: tests must initialize the mock admin
+            // before exercising upgrade authorization.
             .expect("Admin not set");
 
         if caller != admin {
+            // Test-only mock invariant: unauthorized upgrade attempts are
+            // intentionally trapped to model the mock's legacy interface.
             panic!("Unauthorized: Only admin can authorize upgrades");
         }
 

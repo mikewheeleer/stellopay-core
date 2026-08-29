@@ -32,6 +32,9 @@ jobs:
         working-directory: onchain
         run: cargo fmt --all -- --check
 
+      - name: Reject untyped payroll traps
+        run: bash scripts/check-contract-no-traps.sh
+
       - name: Build workspace
         working-directory: onchain
         run: cargo build --workspace --verbose

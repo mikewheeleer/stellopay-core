@@ -86,12 +86,12 @@ fn test_get_agreement_with_max_u128_id_returns_none() {
 /// Passing an ID that was never created to `activate_agreement` must panic
 /// or return an error — not silently succeed.
 #[test]
-#[should_panic(expected = "Agreement not found")]
-fn test_activate_nonexistent_agreement_panics() {
+fn test_activate_nonexistent_agreement_returns_agreement_not_found() {
     let env = create_test_env();
     let (_contract_id, client) = setup_contract(&env);
 
-    client.activate_agreement(&999_999u128);
+    let result = client.try_activate_agreement(&999_999u128);
+    assert_eq!(result, Err(Ok(PayrollError::AgreementNotFound.into())));
 }
 
 /// Verifies that querying employees for a non-existent agreement ID returns
@@ -965,16 +965,16 @@ fn test_admin_set_agreement_paid_amount_admin_succeeds() {
     client.admin_set_agreement_paid_amount(&owner, &1u128, &5000i128);
 }
 
-/// @notice Admin calling `admin_set_agreement_paid_amount` with a negative amount must panic.
+/// @notice Admin calling `admin_set_agreement_paid_amount` with a negative amount must fail.
 ///
 /// Even a trusted admin must not be permitted to write a negative paid amount,
 /// which would corrupt downstream period-calculation invariants.
 #[test]
-#[should_panic(expected = "InvalidAmount")]
-fn test_admin_set_agreement_paid_amount_negative_panics() {
+fn test_admin_set_agreement_paid_amount_negative_returns_invalid_data() {
     let env = create_test_env();
     let (client, owner) = setup_admin_contract(&env);
-    client.admin_set_agreement_paid_amount(&owner, &1u128, &-1i128);
+    let result = client.try_admin_set_agreement_paid_amount(&owner, &1u128, &-1i128);
+    assert_eq!(result, Err(Ok(PayrollError::InvalidData.into())));
 }
 
 // ---------------------------------------------------------------------------
@@ -1013,12 +1013,12 @@ fn test_admin_set_escrow_balance_admin_succeeds() {
 /// Negative escrow balances are nonsensical and would allow claims that
 /// exceed the actual on-chain token holdings of the contract.
 #[test]
-#[should_panic(expected = "InvalidAmount")]
-fn test_admin_set_escrow_balance_negative_panics() {
+fn test_admin_set_escrow_balance_negative_returns_invalid_data() {
     let env = create_test_env();
     let (client, owner) = setup_admin_contract(&env);
     let token = create_test_address(&env);
-    client.admin_set_escrow_balance(&owner, &1u128, &token, &-500i128);
+    let result = client.try_admin_set_escrow_balance(&owner, &1u128, &token, &-500i128);
+    assert_eq!(result, Err(Ok(PayrollError::InvalidData.into())));
 }
 
 // ---------------------------------------------------------------------------
@@ -1113,16 +1113,16 @@ fn test_admin_set_period_duration_admin_succeeds() {
     client.admin_set_period_duration(&owner, &1u128, &31_536_000u64);
 }
 
-/// @notice Admin calling `admin_set_period_duration` with zero must panic.
+/// @notice Admin calling `admin_set_period_duration` with zero must fail.
 ///
 /// A period duration of zero would cause division-by-zero in elapsed-period
 /// arithmetic and must be rejected at the entrypoint boundary.
 #[test]
-#[should_panic(expected = "InvalidDuration")]
-fn test_admin_set_period_duration_zero_panics() {
+fn test_admin_set_period_duration_zero_returns_invalid_data() {
     let env = create_test_env();
     let (client, owner) = setup_admin_contract(&env);
-    client.admin_set_period_duration(&owner, &1u128, &0u64);
+    let result = client.try_admin_set_period_duration(&owner, &1u128, &0u64);
+    assert_eq!(result, Err(Ok(PayrollError::InvalidData.into())));
 }
 
 /// @notice Non-admin caller is rejected by `admin_set_escrow_balance` (try_ variant).

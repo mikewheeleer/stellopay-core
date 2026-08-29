@@ -368,7 +368,7 @@ pub fn fund_milestone_agreement(env: &Env, agreement_id: u128, from: Address, am
         .storage()
         .persistent()
         .get(&MilestoneKey::Employer(agreement_id))
-        .expect("Agreement not found");
+        .unwrap_or_else(|| panic_with_error!(env, PayrollError::AgreementNotFound));
 
     // Only the agreement's employer may fund it.
     assert!(
@@ -383,7 +383,7 @@ pub fn fund_milestone_agreement(env: &Env, agreement_id: u128, from: Address, am
         .storage()
         .persistent()
         .get(&MilestoneKey::Status(agreement_id))
-        .expect("Agreement not found");
+        .unwrap_or_else(|| panic_with_error!(env, PayrollError::AgreementNotFound));
     assert!(
         status != AgreementStatus::Cancelled,
         "Cannot fund a Cancelled agreement"
@@ -400,7 +400,7 @@ pub fn fund_milestone_agreement(env: &Env, agreement_id: u128, from: Address, am
         .unwrap_or(0i128);
     let new_balance = current_balance
         .checked_add(amount)
-        .expect("Escrow balance overflow");
+        .unwrap_or_else(|| panic_with_error!(env, PayrollError::InvalidData));
     env.storage().persistent().set(
         &MilestoneKey::MilestoneEscrowBalance(agreement_id),
         &new_balance,
@@ -410,7 +410,7 @@ pub fn fund_milestone_agreement(env: &Env, agreement_id: u128, from: Address, am
         .storage()
         .persistent()
         .get(&MilestoneKey::Token(agreement_id))
-        .expect("Token not found");
+        .unwrap_or_else(|| panic_with_error!(env, PayrollError::AgreementNotFound));
     TokenClient::new(env, &token_address).transfer(&from, &env.current_contract_address(), &amount);
 
     emit_milestone_funded(
@@ -537,7 +537,7 @@ fn sum_all_milestones(env: &Env, agreement_id: u128) -> i128 {
                     .get::<_, i128>(&MilestoneKey::MilestoneAmount(agreement_id, i))
                     .unwrap_or(0),
             )
-            .expect("milestone total summation overflow");
+            .unwrap_or_else(|| panic_with_error!(env, PayrollError::InvalidData));
     }
     sum
 }
@@ -734,7 +734,9 @@ pub fn reject_milestone(
         let bytes = reason.to_bytes();
         let mut all_whitespace = true;
         for i in 0..bytes.len() {
-            let b = bytes.get(i).unwrap();
+            let Some(b) = bytes.get(i) else {
+                continue;
+            };
             if !(b == b' ' || b == b'\t' || b == b'\n' || b == b'\r') {
                 all_whitespace = false;
                 break;
@@ -1803,7 +1805,8 @@ pub fn add_employee_to_agreement(
     employee: Address,
     salary_per_period: i128,
 ) {
-    let mut agreement = get_agreement(env, agreement_id).expect("Agreement not found");
+    let mut agreement = get_agreement(env, agreement_id)
+        .unwrap_or_else(|| panic_with_error!(env, PayrollError::AgreementNotFound));
 
     agreement.employer.require_auth();
 
@@ -1899,7 +1902,8 @@ pub fn add_employee_to_agreement(
 ///
 /// * [`AgreementActivatedEvent`] with the `agreement_id`.
 pub fn activate_agreement(env: &Env, agreement_id: u128) {
-    let mut agreement = get_agreement(env, agreement_id).expect("Agreement not found");
+    let mut agreement = get_agreement(env, agreement_id)
+        .unwrap_or_else(|| panic_with_error!(env, PayrollError::AgreementNotFound));
 
     agreement.employer.require_auth();
 
@@ -2044,7 +2048,7 @@ pub fn set_grace_extension_policy(
     policy: GracePeriodExtensionPolicy,
 ) -> Result<(), PayrollError> {
     caller.require_auth();
-    let owner: Address = env.storage().persistent().get(&StorageKey::Owner).unwrap();
+    let owner = crate::contract_owner(env)?;
     if caller != owner {
         return Err(PayrollError::Unauthorized);
     }
@@ -2095,7 +2099,7 @@ pub fn extend_grace_period(
         return Err(PayrollError::GraceExtensionInvalid);
     }
 
-    let owner: Address = env.storage().persistent().get(&StorageKey::Owner).unwrap();
+    let owner = crate::contract_owner(env)?;
     let extended_by_owner = caller == owner;
     if !extended_by_owner && caller != agreement.employer {
         return Err(PayrollError::Unauthorized);
@@ -2358,7 +2362,7 @@ fn resolve_dispute_core(
         .storage()
         .persistent()
         .get::<_, Address>(&StorageKey::Arbiter)
-        .expect("No Arbiter");
+        .ok_or(PayrollError::NotArbiter)?;
     if caller != arbiter {
         return Err(PayrollError::NotArbiter);
     }
@@ -3723,9 +3727,8 @@ pub fn claim_time_based(env: &Env, agreement_id: u128) -> Result<(), PayrollErro
 /// # Returns
 /// Number of claimed periods, or 0 if not a time-based agreement
 pub fn get_claimed_periods(env: &Env, agreement_id: u128) -> u32 {
-    let agreement = get_agreement(env, agreement_id).unwrap_or_else(|| {
-        panic!("Agreement not found");
-    });
+    let agreement = get_agreement(env, agreement_id)
+        .unwrap_or_else(|| panic_with_error!(env, PayrollError::AgreementNotFound));
 
     agreement.claimed_periods.unwrap_or(0)
 }
@@ -3867,7 +3870,7 @@ fn convert_amount(
 ///
 /// * [`AgreementPausedEvent`] with the `agreement_id`.
 pub fn pause_agreement(env: &Env, agreement_id: u128) -> Result<(), PayrollError> {
-    let mut agreement = get_agreement(env, agreement_id).expect("Agreement not found");
+    let mut agreement = get_agreement(env, agreement_id).ok_or(PayrollError::AgreementNotFound)?;
 
     agreement.employer.require_auth();
 
@@ -3922,7 +3925,8 @@ pub fn pause_agreement(env: &Env, agreement_id: u128) -> Result<(), PayrollError
 ///
 /// * [`AgreementResumedEvent`] with the `agreement_id`.
 pub fn resume_agreement(env: &Env, agreement_id: u128) {
-    let mut agreement = get_agreement(env, agreement_id).expect("Agreement not found");
+    let mut agreement = get_agreement(env, agreement_id)
+        .unwrap_or_else(|| panic_with_error!(env, PayrollError::AgreementNotFound));
 
     agreement.employer.require_auth();
 
@@ -4108,7 +4112,8 @@ fn add_to_employer_agreements(env: &Env, employer: &Address, agreement_id: u128)
 /// * [`AgreementCancelledEvent`] with the `agreement_id`.
 /// * An audit entry of type `AuditEvent::AgreementCancelled` for the employer.
 pub fn cancel_agreement(env: &Env, agreement_id: u128) {
-    let mut agreement = get_agreement(env, agreement_id).expect("Agreement not found");
+    let mut agreement = get_agreement(env, agreement_id)
+        .unwrap_or_else(|| panic_with_error!(env, PayrollError::AgreementNotFound));
 
     agreement.employer.require_auth();
 
@@ -4150,7 +4155,8 @@ pub fn cancel_agreement(env: &Env, agreement_id: u128) {
 /// - Refunds remaining escrow balance to employer
 /// - Marks agreement as ready for finalization
 pub fn finalize_grace_period(env: &Env, agreement_id: u128) {
-    let agreement = get_agreement(env, agreement_id).expect("Agreement not found");
+    let agreement = get_agreement(env, agreement_id)
+        .unwrap_or_else(|| panic_with_error!(env, PayrollError::AgreementNotFound));
 
     agreement.employer.require_auth();
 
@@ -4161,7 +4167,7 @@ pub fn finalize_grace_period(env: &Env, agreement_id: u128) {
 
     let cancelled_at = agreement
         .cancelled_at
-        .expect("Cancelled agreement must have cancelled_at timestamp");
+        .unwrap_or_else(|| panic_with_error!(env, PayrollError::InvalidData));
 
     let current_time = env.ledger().timestamp();
     let effective_grace = effective_cancelled_grace_duration_seconds(
@@ -4171,7 +4177,7 @@ pub fn finalize_grace_period(env: &Env, agreement_id: u128) {
     );
     let grace_end = cancelled_at
         .checked_add(effective_grace)
-        .expect("grace end timestamp overflow");
+        .unwrap_or_else(|| panic_with_error!(env, PayrollError::InvalidData));
 
     assert!(
         current_time >= grace_end,
@@ -4460,7 +4466,10 @@ pub fn is_emergency_paused(env: &Env) -> bool {
 /// # Access Control
 /// Requires owner authentication
 pub fn set_emergency_guardians(env: &Env, guardians: Vec<Address>) {
-    let owner: Address = env.storage().persistent().get(&StorageKey::Owner).unwrap();
+    let owner = match crate::contract_owner(env) {
+        Ok(owner) => owner,
+        Err(error) => panic_with_error!(env, error),
+    };
     owner.require_auth();
     env.storage()
         .persistent()
@@ -4606,7 +4615,7 @@ fn execute_emergency_pause(env: &Env) -> Result<(), PayrollError> {
 /// # Access Control
 /// Requires owner authentication
 pub fn emergency_pause(env: &Env) -> Result<(), PayrollError> {
-    let owner: Address = env.storage().persistent().get(&StorageKey::Owner).unwrap();
+    let owner = crate::contract_owner(env)?;
     owner.require_auth();
 
     let pause_state = crate::storage::EmergencyPause {
@@ -4631,7 +4640,7 @@ pub fn emergency_pause(env: &Env) -> Result<(), PayrollError> {
 /// # Access Control
 /// Requires owner authentication
 pub fn emergency_unpause(env: &Env) -> Result<(), PayrollError> {
-    let owner: Address = env.storage().persistent().get(&StorageKey::Owner).unwrap();
+    let owner = crate::contract_owner(env)?;
     owner.require_auth();
 
     let pause_state = crate::storage::EmergencyPause {

@@ -6,7 +6,7 @@ use soroban_sdk::{
     testutils::{Address as _, Ledger},
     Address, BytesN, Env,
 };
-use stello_pay_contract::{PayrollContract, PayrollContractClient};
+use stello_pay_contract::{storage::PayrollError, PayrollContract, PayrollContractClient};
 
 const NEW_CONTRACT_WASM: &[u8] = include_bytes!("./stello_pay_contract.wasm");
 
@@ -46,8 +46,7 @@ fn test_unit_upgrade_success_owner_no_rbac() {
 }
 
 #[test]
-#[should_panic(expected = "Unauthorized")]
-fn test_unit_upgrade_rejects_non_owner_no_rbac() {
+fn test_unit_upgrade_rejects_non_owner_no_rbac_returns_unauthorized() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -55,8 +54,8 @@ fn test_unit_upgrade_rejects_non_owner_no_rbac() {
     let new_wasm_hash: BytesN<32> = env.deployer().upload_contract_wasm(NEW_CONTRACT_WASM);
     let intruder = Address::generate(&env);
 
-    // Call upgrade as intruder - should panic
-    client.upgrade(&new_wasm_hash, &intruder);
+    let result = client.try_upgrade(&new_wasm_hash, &intruder);
+    assert_eq!(result, Err(Ok(PayrollError::Unauthorized.into())));
 }
 
 #[test]

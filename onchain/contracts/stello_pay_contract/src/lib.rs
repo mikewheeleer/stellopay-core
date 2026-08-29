@@ -41,7 +41,7 @@ pub mod storage;
 
 use events::{emit_contract_migrated, ContractMigratedEvent};
 use rbac_interface::{RbacContractClient, Role};
-use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, Vec};
+use soroban_sdk::{contract, contractimpl, panic_with_error, Address, BytesN, Env, Vec};
 use storage::{
     Agreement, BatchEscrowCreateResult, BatchMilestoneResult, BatchPayrollCreateResult,
     BatchPayrollResult, DisputeStatus, EscrowCreateParams, GracePeriodExtensionPolicy, Milestone,
@@ -67,6 +67,19 @@ use crate::audit::LifecycleAuditEntry;
 #[contract]
 pub struct PayrollContract;
 
+/// Read the initialized owner through one typed-error boundary.
+///
+/// Missing owner storage is a recoverable contract precondition, not an
+/// impossible host state: a caller can reach administrative entrypoints before
+/// initialization, or after an archived persistent entry is restored. Keeping
+/// this accessor shared prevents each entrypoint from inventing its own trap.
+pub(crate) fn contract_owner(env: &Env) -> Result<Address, PayrollError> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::Owner)
+        .ok_or(PayrollError::Unauthorized)
+}
+
 #[contractimpl]
 impl PayrollContract {
     fn require_upgrade_admin(env: &Env, operator: &Address) {
@@ -84,9 +97,14 @@ impl PayrollContract {
             return;
         }
 
-        let owner: Address = env.storage().persistent().get(&StorageKey::Owner).unwrap();
+        let owner = match contract_owner(env) {
+            Ok(owner) => owner,
+            Err(error) => panic_with_error!(env, error),
+        };
         operator.require_auth();
-        assert!(*operator == owner, "Unauthorized");
+        if *operator != owner {
+            panic_with_error!(env, PayrollError::Unauthorized);
+        }
     }
 
     ///
@@ -104,7 +122,7 @@ impl PayrollContract {
     pub fn initialize(env: Env, owner: Address) {
         owner.require_auth();
         if env.storage().persistent().has(&StorageKey::Owner) {
-            panic!("Already initialized");
+            panic_with_error!(env, PayrollError::InvalidData);
         }
         env.storage().persistent().set(&StorageKey::Owner, &owner);
     }
@@ -118,9 +136,14 @@ impl PayrollContract {
     /// # Access Control
     /// Requires owner authentication
     pub fn set_rbac_contract(env: Env, owner: Address, rbac_contract: Address) {
-        let stored_owner: Address = env.storage().persistent().get(&StorageKey::Owner).unwrap();
+        let stored_owner = match contract_owner(&env) {
+            Ok(owner) => owner,
+            Err(error) => panic_with_error!(&env, error),
+        };
         owner.require_auth();
-        assert!(owner == stored_owner, "Unauthorized");
+        if owner != stored_owner {
+            panic_with_error!(&env, PayrollError::Unauthorized);
+        }
         env.storage()
             .persistent()
             .set(&StorageKey::RbacContract, &rbac_contract);
@@ -135,9 +158,14 @@ impl PayrollContract {
     /// # Access Control
     /// Requires owner authentication
     pub fn set_rate_limiter_contract(env: Env, owner: Address, rate_limiter: Address) {
-        let stored_owner: Address = env.storage().persistent().get(&StorageKey::Owner).unwrap();
+        let stored_owner = match contract_owner(&env) {
+            Ok(owner) => owner,
+            Err(error) => panic_with_error!(&env, error),
+        };
         owner.require_auth();
-        assert!(owner == stored_owner, "Unauthorized");
+        if owner != stored_owner {
+            panic_with_error!(&env, PayrollError::Unauthorized);
+        }
         env.storage()
             .persistent()
             .set(&StorageKey::RateLimiterContract, &rate_limiter);
@@ -159,9 +187,14 @@ impl PayrollContract {
     /// # Access Control
     /// Requires owner authentication
     pub fn set_salary_adjustment_contract(env: Env, owner: Address, salary_adjustment: Address) {
-        let stored_owner: Address = env.storage().persistent().get(&StorageKey::Owner).unwrap();
+        let stored_owner = match contract_owner(&env) {
+            Ok(owner) => owner,
+            Err(error) => panic_with_error!(&env, error),
+        };
         owner.require_auth();
-        assert!(owner == stored_owner, "Unauthorized");
+        if owner != stored_owner {
+            panic_with_error!(&env, PayrollError::Unauthorized);
+        }
         env.storage()
             .persistent()
             .set(&StorageKey::SalaryAdjustmentContract, &salary_adjustment);
@@ -184,9 +217,14 @@ impl PayrollContract {
     /// # Access Control
     /// Requires owner authentication.
     pub fn set_milestone_hook_contract(env: Env, owner: Address, hook_contract: Address) {
-        let stored_owner: Address = env.storage().persistent().get(&StorageKey::Owner).unwrap();
+        let stored_owner = match contract_owner(&env) {
+            Ok(owner) => owner,
+            Err(error) => panic_with_error!(&env, error),
+        };
         owner.require_auth();
-        assert!(owner == stored_owner, "Unauthorized");
+        if owner != stored_owner {
+            panic_with_error!(&env, PayrollError::Unauthorized);
+        }
         env.storage()
             .persistent()
             .set(&StorageKey::MilestoneHookContract, &hook_contract);
@@ -269,7 +307,7 @@ impl PayrollContract {
             return;
         }
 
-        panic!("Unsupported migration version");
+        panic_with_error!(env, PayrollError::InvalidData);
     }
 
     /// Creates a payroll agreement for multiple employees.
@@ -1487,7 +1525,7 @@ impl PayrollContract {
     ) {
         Self::require_upgrade_admin(&env, &operator);
         if amount < 0 {
-            panic!("InvalidAmount: paid amount must be non-negative");
+            panic_with_error!(env, PayrollError::InvalidData);
         }
         storage::DataKey::set_agreement_paid_amount(&env, agreement_id, amount);
     }
@@ -1519,7 +1557,7 @@ impl PayrollContract {
     ) {
         Self::require_upgrade_admin(&env, &operator);
         if amount < 0 {
-            panic!("InvalidAmount: escrow balance must be non-negative");
+            panic_with_error!(env, PayrollError::InvalidData);
         }
         storage::DataKey::set_agreement_escrow_balance(&env, agreement_id, &token, amount);
     }
@@ -1593,7 +1631,7 @@ impl PayrollContract {
     ) {
         Self::require_upgrade_admin(&env, &operator);
         if duration == 0 {
-            panic!("InvalidDuration: period duration must be greater than zero");
+            panic_with_error!(env, PayrollError::InvalidData);
         }
         storage::DataKey::set_agreement_period_duration(&env, agreement_id, duration);
     }

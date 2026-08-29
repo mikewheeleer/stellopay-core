@@ -337,10 +337,10 @@ fn test_fund_contributor_cannot_fund_fails() {
 
 /// Funding a non-existent agreement ID must fail.
 #[test]
-#[should_panic(expected = "Agreement not found")]
-fn test_fund_nonexistent_agreement_fails() {
+fn test_fund_nonexistent_agreement_returns_agreement_not_found() {
     let (env, employer, _contributor, _token, client) = create_test_env();
-    client.fund_milestone_agreement(&999u128, &employer, &500i128);
+    let result = client.try_fund_milestone_agreement(&999u128, &employer, &500i128);
+    assert_eq!(result, Err(Ok(PayrollError::AgreementNotFound.into())));
 }
 
 /// Approving a milestone without prior funding must fail the balance invariant.

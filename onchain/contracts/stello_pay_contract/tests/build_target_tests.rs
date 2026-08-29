@@ -133,17 +133,36 @@ fn crate_declares_cdylib_crate_type() {
     );
 }
 
-/// Double-initialization must panic.
+/// Double-initialization must return the stable typed error code.
 #[test]
-#[should_panic(expected = "Already initialized")]
-fn test_double_initialize_panics() {
+fn test_double_initialize_returns_invalid_data() {
     let env = Env::default();
     env.mock_all_auths();
     let id = env.register(PayrollContract, ());
     let client = PayrollContractClient::new(&env, &id);
     let owner = Address::generate(&env);
     client.initialize(&owner);
-    client.initialize(&owner);
+    assert_eq!(
+        client.try_initialize(&owner),
+        Err(Ok(PayrollError::InvalidData.into()))
+    );
+}
+
+/// Administrative reads must report the typed authorization error even when
+/// the contract has not been initialized and therefore has no Owner key.
+#[test]
+fn test_admin_entrypoint_without_owner_returns_unauthorized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let id = env.register(PayrollContract, ());
+    let client = PayrollContractClient::new(&env, &id);
+    let operator = Address::generate(&env);
+    let rbac = Address::generate(&env);
+
+    assert_eq!(
+        client.try_set_rbac_contract(&operator, &rbac),
+        Err(Ok(PayrollError::Unauthorized.into()))
+    );
 }
 
 /// Fresh contract is not emergency-paused.

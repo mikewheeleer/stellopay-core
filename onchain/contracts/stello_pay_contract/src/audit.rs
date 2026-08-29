@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, Env, IntoVal, Symbol, Val, Vec};
+use soroban_sdk::{contracttype, panic_with_error, Address, Env, IntoVal, Symbol, Val, Vec};
 
 /// Canonical lifecycle audit events recorded by the payroll contract.
 #[contracttype]
@@ -76,12 +76,11 @@ impl AuditEvent {
 /// if no external audit logger is configured.
 pub fn set_audit_logger(env: &Env, owner: Address, audit_logger: Address) {
     owner.require_auth();
-    let configured_owner: Address = env
-        .storage()
-        .persistent()
-        .get(&crate::storage::StorageKey::Owner)
-        .expect("Owner not set");
-    assert!(owner == configured_owner, "Unauthorized: not owner");
+    let configured_owner = crate::contract_owner(env)
+        .unwrap_or_else(|_| panic_with_error!(env, crate::storage::PayrollError::Unauthorized));
+    if owner != configured_owner {
+        panic_with_error!(env, crate::storage::PayrollError::Unauthorized);
+    }
 
     env.storage()
         .persistent()
