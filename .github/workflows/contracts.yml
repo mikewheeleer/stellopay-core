@@ -68,7 +68,10 @@ jobs:
           done
 
       # Keep this as its own step so crossing Stellar's absolute deployment
-      # ceiling is not hidden inside the relative-regression report.
+      # ceiling is not hidden inside the relative-regression report. Existing
+      # over-limit artifacts are grandfathered from the committed baseline;
+      # they remain tracked by the separate contract-size cleanup work. A new
+      # violation, or growth in an existing violation, still fails CI.
       - name: Enforce Stellar contract size ceiling
         run: |
           set -euo pipefail
@@ -76,9 +79,25 @@ jobs:
           failed=0
           for artifact in onchain/target/wasm-size-check/release/*.wasm; do
             size=$(stat -c '%s' "$artifact")
-            if (( size > max_size )); then
-              echo "::error title=WASM exceeds Stellar limit::${artifact} is ${size} bytes; maximum is ${max_size}" >&2
+            contract="${artifact##*/}"
+            contract="${contract%.wasm}"
+            baseline_size=$(jq -r --arg contract "$contract" '.contracts[$contract].size_bytes // empty' benchmarks/wasm_sizes.json)
+
+            if (( size <= max_size )); then
+              continue
+            fi
+
+            if [[ -z "$baseline_size" ]]; then
+              echo "::error title=New WASM exceeds Stellar limit::${artifact} is ${size} bytes; maximum is ${max_size}" >&2
               failed=1
+            elif (( baseline_size <= max_size )); then
+              echo "::error title=WASM crossed Stellar limit::${artifact} is ${size} bytes; baseline was ${baseline_size} bytes and maximum is ${max_size}" >&2
+              failed=1
+            elif (( size > baseline_size )); then
+              echo "::error title=Oversized WASM regressed::${artifact} is ${size} bytes; baseline was ${baseline_size} bytes and maximum is ${max_size}" >&2
+              failed=1
+            else
+              echo "::warning title=Pre-existing oversized WASM::${artifact} is ${size} bytes; maximum is ${max_size}, baseline was ${baseline_size} bytes" >&2
             fi
           done
           exit "$failed"

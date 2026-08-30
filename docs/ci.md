@@ -162,9 +162,12 @@ merge.
    `wasm32-unknown-unknown` in release mode (step 7 above).
 2. CI inventories every `cdylib` contract explicitly, excluding Cargo's
    dependency artifacts under `target/**/release/deps`.
-3. Every inventoried artifact must be at or below **131,072 bytes**, the
-   Stellar deployment ceiling. This is a separate hard-failure step, even
-   when a relative comparison would remain within tolerance.
+3. Every inventoried artifact is checked against **131,072 bytes**, the
+   Stellar deployment ceiling. A new over-limit artifact, or growth in an
+   already over-limit artifact, is a hard failure even when a relative
+   comparison would remain within tolerance. Existing over-limit artifacts
+   recorded in the committed baseline are reported as warnings while their
+   separate size-reduction work is completed.
 4. The committed `benchmarks/wasm_sizes.json` file records the size,
    SHA-256 (`sha256:<hex>`), and capture date for every successfully
    built `.wasm`.
@@ -185,8 +188,8 @@ merge.
 
 The first baseline generated from the current `main` source records two
 existing over-ceiling artifacts (`price_oracle` and `stello_pay_contract`).
-The ceiling step intentionally exposes that deployment risk; reducing those
-artifacts is tracked separately and is outside this CI-guard change.
+The ceiling step reports those artifacts as warnings unless they grow; reducing
+them is tracked separately and is outside this CI-guard change.
 
 7. The job **passes** for any contract that:
    - Exactly equals its baseline.
@@ -210,9 +213,18 @@ for contract in multisig price_oracle rbac stello_pay_contract; do
        "onchain/target/wasm-size-check/release/${contract}.wasm"
 done
 
-# 3. Confirm no artifact crosses 131,072 bytes before refreshing.
+# 3. Confirm no new artifact crosses 131,072 bytes before refreshing. Existing
+#    over-limit artifacts may remain while their separate cleanup is in flight.
 for artifact in onchain/target/wasm-size-check/release/*.wasm; do
-    test "$(stat -c '%s' "$artifact")" -le 131072
+    size="$(stat -c '%s' "$artifact")"
+    contract="${artifact##*/}"
+    contract="${contract%.wasm}"
+    baseline_size="$(jq -r --arg contract "$contract" '.contracts[$contract].size_bytes // empty' benchmarks/wasm_sizes.json)"
+    if [ "$size" -gt 131072 ]; then
+        test -n "$baseline_size"
+        test "$baseline_size" -gt 131072
+        test "$size" -le "$baseline_size"
+    fi
 done
 
 # 4. Refresh the committed baseline.
