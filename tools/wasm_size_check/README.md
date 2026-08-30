@@ -17,9 +17,19 @@ audit.
 CI invocation (after `cargo build --target wasm32-unknown-unknown --release`):
 
 ```bash
+# Keep Cargo's dependency artifacts under `release/deps` out of the
+# deployable-contract inventory. These are the workspace's four `cdylib`
+# crates and must stay in sync with the CI workflow.
+inventory_dir=../../onchain/target/wasm-size-check/release
+mkdir -p "$inventory_dir"
+for contract in multisig price_oracle rbac stello_pay_contract; do
+  cp "../../onchain/target/wasm32-unknown-unknown/release/${contract}.wasm" \
+     "$inventory_dir/${contract}.wasm"
+done
+
 cargo run --release -- \
   --baseline ../../benchmarks/wasm_sizes.json \
-  --wasm-dir ../../onchain/target/wasm32-unknown-unknown/release \
+  --wasm-dir ../../onchain/target/wasm-size-check/release \
   --tolerance-pct 5
 ```
 
@@ -28,7 +38,7 @@ cargo run --release -- \
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--baseline <path>`    | _required_ | Path to the committed baseline JSON file |
-| `--wasm-dir <path>`    | _required_ | Directory produced by `cargo build --release` for `wasm32-unknown-unknown` |
+| `--wasm-dir <path>`    | _required_ | Directory containing the deployable `.wasm` inventory |
 | `--tolerance-pct <n>`  | `5`        | Maximum allowed percent growth before a contract is reported as regressing |
 | `--update-baseline`    | off        | Write the measured sizes back to the baseline file (creating entries for new contracts, overwriting existing entries with the new value) |
 | `--fail-on-new`        | off        | With `--update-baseline=false` (the default), fail when a `.wasm` is present that has no entry in the baseline (new contract needs an explicit baseline) |
@@ -61,10 +71,13 @@ different source than the original capture).
 
 When a PR legitimately changes a contract's compiled size:
 
-1. Run the tool locally: `cargo run --release -- --baseline … --wasm-dir …`
-2. Confirm the reported deltas are intentional.
-3. Re-run with `--update-baseline` to refresh the committed baseline.
-4. Commit `benchmarks/wasm_sizes.json` in the **same PR** as the source change.
+1. Build the workspace and copy the four `cdylib` artifacts into an inventory
+   directory as shown above.
+2. Run the tool locally: `cargo run --release -- --baseline … --wasm-dir …`
+3. Confirm the reported deltas are intentional and that every artifact stays
+   below Stellar's 131,072-byte hard ceiling.
+4. Re-run with `--update-baseline` to refresh the committed baseline.
+5. Commit `benchmarks/wasm_sizes.json` in the **same PR** as the source change.
 
 CI will fail without this update — a size regression without a refreshed
 baseline is treated as a build failure.
