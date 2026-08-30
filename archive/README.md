@@ -36,8 +36,9 @@ at all. Removing the module and those dependencies brings the build to
 Three entrypoints went with it: `admin_restore_agreement`,
 `admin_restore_from_encrypted`, `admin_restore_dry_run`.
 
-`docs/encrypted-backup-recovery.md` still describes this feature and needs to
-be marked as archived or planned.
+`archive/encrypted-backup-recovery.md` retains the historical feature
+description and is explicitly marked as archived. It is not a description of
+the currently deployed contract surface.
 
 To restore, move the files back to their mirrored paths, re-add the six
 dependencies to `Cargo.toml`, re-add `pub mod backup;` and

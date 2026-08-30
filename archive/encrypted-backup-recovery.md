@@ -1,4 +1,9 @@
-# Encrypted Backup & Recovery
+# Archived: Encrypted Backup & Recovery
+
+> Archived documentation. The encrypted backup/restore module is no longer
+> part of the deployable `stello_pay_contract`; this page is retained only as
+> historical restoration guidance. See [`archive/README.md`](README.md) for
+> the archive policy and the wasm-size reason for removal.
 
 This document describes the full lifecycle for backing up and recovering
 `Agreement` (and `AgreementBalance`) state from the `stello_pay_contract`
