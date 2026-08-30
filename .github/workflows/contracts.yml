@@ -18,6 +18,9 @@ jobs:
       - name: Check contract documentation
         run: python3 tools/doc_checker/run_ci.py
 
+      - name: Reject committed Cargo build output
+        run: bash scripts/check-no-committed-build-output.sh
+
       # Installed via the preinstalled rustup rather than dtolnay/rust-toolchain:
       # fetching that action from codeload intermittently returns 429 and fails
       # the job during setup, before any of the checks below even run.
